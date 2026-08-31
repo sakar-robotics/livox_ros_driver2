@@ -259,13 +259,41 @@ else(ROS_EDITION STREQUAL "ROS2")
     LIBRARY_NAME ${PROJECT_NAME}
   )
 
-  ## make sure the livox_lidar_sdk_shared library is installed
-  find_library(LIVOX_LIDAR_SDK_LIBRARY liblivox_lidar_sdk_shared.so /usr/local/lib REQUIRED)
-
+  ## Locate Livox-SDK2.
   ##
+  ## The SDK is a plain-CMake package in this workspace (src/thirdparty/Livox-SDK2),
+  ## and the <depend>livox_sdk2</depend> in package.xml makes colcon build and install
+  ## it before this package -- no separate cmake/make/make install pass needed.
+  ##
+  ## It installs no *Config.cmake, which is the only thing colcon looks for when
+  ## deciding to put a prefix on CMAKE_PREFIX_PATH, so the SDK's install prefix never
+  ## lands there. What colcon does export for it is LD_LIBRARY_PATH (its lib/ holds a
+  ## shared library), so hint the library search from that and derive the include
+  ## directory from whichever prefix turns up.
+  ##
+  ## HINTS are searched ahead of the system directories, so the workspace build wins
+  ## while a hand-installed SDK under /usr/local still works as a fallback.
+  find_library(LIVOX_LIDAR_SDK_LIBRARY
+    NAMES livox_lidar_sdk_shared
+    HINTS ENV LD_LIBRARY_PATH
+    REQUIRED)
+
+  get_filename_component(LIVOX_LIDAR_SDK_LIBRARY_DIR "${LIVOX_LIDAR_SDK_LIBRARY}" DIRECTORY)
+  get_filename_component(LIVOX_LIDAR_SDK_PREFIX "${LIVOX_LIDAR_SDK_LIBRARY_DIR}" DIRECTORY)
+
   find_path(LIVOX_LIDAR_SDK_INCLUDE_DIR
     NAMES "livox_lidar_api.h" "livox_lidar_def.h"
+    HINTS "${LIVOX_LIDAR_SDK_PREFIX}/include"
     REQUIRED)
+
+  message(STATUS "Livox-SDK2 library: ${LIVOX_LIDAR_SDK_LIBRARY}")
+  message(STATUS "Livox-SDK2 headers: ${LIVOX_LIDAR_SDK_INCLUDE_DIR}")
+
+  ## Also bake the SDK's directory into the installed RPATH. Sourcing the workspace
+  ## is enough on its own (colcon's LD_LIBRARY_PATH hook covers it), but that hook
+  ## comes from an optional colcon extension; the RPATH means the node still loads if
+  ## it is missing. Must precede any add_library/add_executable call.
+  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
   ## PCL library
   link_directories(${PCL_LIBRARY_DIRS})
