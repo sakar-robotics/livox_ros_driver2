@@ -20,6 +20,12 @@
   <depend>rcl_interfaces</depend>
   <depend>libpcl-all-dev</depend>
 
+  <!-- The vendor C SDK, kept as its own plain-CMake package in
+       src/thirdparty/Livox-SDK2. This dependency is what makes `colcon build`
+       build the SDK before this package instead of needing a separate
+       cmake/make/make install pass. -->
+  <depend>livox_sdk2</depend>
+
   <exec_depend>rosbag2</exec_depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
 

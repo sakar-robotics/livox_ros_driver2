@@ -267,6 +267,14 @@ else(ROS_EDITION STREQUAL "ROS2")
   add_subdirectory(${LIVOX_SDK2_DIR}/sdk_core ${CMAKE_CURRENT_BINARY_DIR}/livox_sdk2)
   set(LIVOX_LIDAR_SDK_LIBRARY livox_lidar_sdk_shared)
 
+  message(STATUS "Livox-SDK2 library: ${LIVOX_LIDAR_SDK_LIBRARY}")
+
+  ## Also bake the SDK's directory into the installed RPATH. Sourcing the workspace
+  ## is enough on its own (colcon's LD_LIBRARY_PATH hook covers it), but that hook
+  ## comes from an optional colcon extension; the RPATH means the node still loads if
+  ## it is missing. Must precede any add_library/add_executable call.
+  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
   ## PCL library
   link_directories(${PCL_LIBRARY_DIRS})
   add_definitions(${PCL_DEFINITIONS})
