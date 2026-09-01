@@ -259,35 +259,15 @@ else(ROS_EDITION STREQUAL "ROS2")
     LIBRARY_NAME ${PROJECT_NAME}
   )
 
-  ## Locate Livox-SDK2.
-  ##
-  ## The SDK is a plain-CMake package in this workspace (src/thirdparty/Livox-SDK2),
-  ## and the <depend>livox_sdk2</depend> in package.xml makes colcon build and install
-  ## it before this package -- no separate cmake/make/make install pass needed.
-  ##
-  ## It installs no *Config.cmake, which is the only thing colcon looks for when
-  ## deciding to put a prefix on CMAKE_PREFIX_PATH, so the SDK's install prefix never
-  ## lands there. What colcon does export for it is LD_LIBRARY_PATH (its lib/ holds a
-  ## shared library), so hint the library search from that and derive the include
-  ## directory from whichever prefix turns up.
-  ##
-  ## HINTS are searched ahead of the system directories, so the workspace build wins
-  ## while a hand-installed SDK under /usr/local still works as a fallback.
-  find_library(LIVOX_LIDAR_SDK_LIBRARY
-    NAMES livox_lidar_sdk_shared
-    HINTS ENV LD_LIBRARY_PATH
-    REQUIRED)
-
-  get_filename_component(LIVOX_LIDAR_SDK_LIBRARY_DIR "${LIVOX_LIDAR_SDK_LIBRARY}" DIRECTORY)
-  get_filename_component(LIVOX_LIDAR_SDK_PREFIX "${LIVOX_LIDAR_SDK_LIBRARY_DIR}" DIRECTORY)
-
-  find_path(LIVOX_LIDAR_SDK_INCLUDE_DIR
-    NAMES "livox_lidar_api.h" "livox_lidar_def.h"
-    HINTS "${LIVOX_LIDAR_SDK_PREFIX}/include"
-    REQUIRED)
+  ## Build livox_lidar_sdk_shared in-tree from the sibling Livox-SDK2 checkout
+  ## (src/thirdparty/Livox-SDK2) as part of this package's own build, instead
+  ## of requiring a prior `cmake && make install` into /usr/local.
+  set(LIVOX_SDK2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Livox-SDK2" CACHE PATH
+    "Path to the Livox-SDK2 source tree")
+  add_subdirectory(${LIVOX_SDK2_DIR}/sdk_core ${CMAKE_CURRENT_BINARY_DIR}/livox_sdk2)
+  set(LIVOX_LIDAR_SDK_LIBRARY livox_lidar_sdk_shared)
 
   message(STATUS "Livox-SDK2 library: ${LIVOX_LIDAR_SDK_LIBRARY}")
-  message(STATUS "Livox-SDK2 headers: ${LIVOX_LIDAR_SDK_INCLUDE_DIR}")
 
   ## Also bake the SDK's directory into the installed RPATH. Sourcing the workspace
   ## is enough on its own (colcon's LD_LIBRARY_PATH hook covers it), but that hook
@@ -338,7 +318,6 @@ else(ROS_EDITION STREQUAL "ROS2")
   target_include_directories(${PROJECT_NAME} PUBLIC
     ${PCL_INCLUDE_DIRS}
     ${APR_INCLUDE_DIRS}
-    ${LIVOX_LIDAR_SDK_INCLUDE_DIR}
     ${LIVOX_INTERFACES_INCLUDE_DIRECTORIES}   # for custom msgs
     3rdparty
     src
