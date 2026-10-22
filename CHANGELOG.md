@@ -1,6 +1,10 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [1.2.8]
+### Added
+- Support Mid-360L Lidar.
+
 ## [1.2.7]
 ### Added
 - Support Avia2 Lidar.
