@@ -201,6 +201,57 @@ uint8   line            # laser number in lidar
 
 &ensp;&ensp;&ensp;&ensp;Please refer to the pcl :: PointXYZI data structure in the point_types.hpp file of the PCL library.
 
+### 3.3 Work mode: motor on only while the driver runs (Sakar fork, ROS2, Mid-360)
+
+A Mid-360 in SAMPLING spins its motor and fires its laser. In IDLE only its network is up, and it
+still answers the driver. The lidar keeps the last mode it was set to across a power cut, so it
+powers up in whatever mode it was last left in.
+
+- **On start** the driver sets SAMPLING, as upstream does. From IDLE the motor starts first, so the
+  first points come ~6.5 s after launch.
+- **On exit** (SIGINT, which is what `ros2 launch` and `systemctl stop` send) the driver sets IDLE,
+  waiting up to 2 s for it. That is also what the lidar powers up in next time. Parameter
+  `idle_on_exit`, default `true`; `false` leaves it sampling, as upstream does. A driver killed
+  (SIGKILL), crashed, or powered off while running leaves the lidar in SAMPLING.
+- **On request**, `livox/set_sampling` (`std_srvs/srv/SetBool`): `true` for SAMPLING, `false` for
+  IDLE. It answers once every connected Mid-360 reports that state (`message` says how long it
+  took), or fails after 15 s (SAMPLING) / 3 s (IDLE). A Mid-360 that connects later is given the
+  same mode.
+
+  ```bash
+  ros2 service call /livox/set_sampling std_srvs/srv/SetBool "{data: false}"  # motor off
+  ros2 service call /livox/set_sampling std_srvs/srv/SetBool "{data: true}"   # motor on
+  ```
+- **For debugging**, `livox/work_mode` (`std_msgs/msg/String`, latched) gives the lidar's current
+  state once a second: `SAMPLING`, `IDLE`, `MOTOR_STARTUP`, `READY`, `SELFCHECK`, `ERROR`,
+  `UPGRADE`, `NOT_ANSWERING`, or `NO_LIDAR` before a Mid-360 connects. With several Mid-360s it
+  is `ip: STATE` for each, comma-separated.
+
+  ```bash
+  ros2 topic echo /livox/work_mode
+  ```
+
+**Checking it on the robot.** Nothing else may hold the lidar's ports (another driver, or a
+Livox-SDK2 tool), and `ros2 pkg prefix livox_ros_driver2` must be the workspace with this fork.
+
+```bash
+ros2 launch mmr_perception 3d_lidar.launch.py      # terminal 1
+ros2 topic echo /livox/work_mode                    # terminal 2: SAMPLING after ~6.5 s
+ros2 topic hz /livox/lidar                          # terminal 3: ~20 Hz while SAMPLING
+ros2 service call /livox/set_sampling std_srvs/srv/SetBool "{data: false}"
+#   -> success=True, 'IDLE after ~200 ms'; work_mode IDLE, /livox/lidar stops, motor quiet
+ros2 service call /livox/set_sampling std_srvs/srv/SetBool "{data: true}"
+#   -> success=True, 'SAMPLING after ~6300 ms'; work_mode MOTOR_STARTUP, then SAMPLING
+```
+
+Ctrl+C in terminal 1 then prints `lidar idle on exit: IDLE after ~200 ms` and the motor stops.
+A service call that waits forever for the service is usually a ROS_DOMAIN_ID or RMW that differs
+between the terminals.
+
+Livox-SDK2 names its work modes after the HAP: the Mid-360's IDLE is `0x02`, which the SDK calls
+`kLivoxLidarWakeUp`. Other models' modes differ, so they are left sampling and the service fails
+when no Mid-360 is connected.
+
 ## 4. LiDAR config
 
 LiDAR Configurations (such as ip, port, data type... etc.) can be set via a json-style config file. Config files for single HAP, Mid360, Mid360s, Avia2 and mixed-LiDARs are in the "config" folder. The parameter naming *'user_config_path'* in launch files indicates such json file path.

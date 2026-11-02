@@ -137,6 +137,7 @@ DriverNode::DriverNode(const rclcpp::NodeOptions & node_options)
   this->declare_parameter("user_config_path", "path_default");
   this->declare_parameter("cmdline_input_bd_code", "000000000000001");
   this->declare_parameter("lvx_file_path", "/home/livox/livox_test.lvx");
+  this->declare_parameter("idle_on_exit", true);
 
   this->get_parameter("xfer_format", xfer_format);
   this->get_parameter("multi_topic", multi_topic);
@@ -177,6 +178,34 @@ DriverNode::DriverNode(const rclcpp::NodeOptions & node_options)
     } else {
       DRIVER_ERROR(*this, "Init lds lidar fail!");
     }
+
+    // Mid-360 IDLE (motor and laser off) on exit and on request; README, "Work mode".
+    read_lidar->SetIdleOnExit(this->get_parameter("idle_on_exit").as_bool());
+    set_sampling_service_ = this->create_service<std_srvs::srv::SetBool>(
+        "livox/set_sampling",
+        [this, read_lidar](const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                           std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+          // SAMPLING from IDLE starts the motor first, ~6.5 s.
+          response->success = read_lidar->SetSampling(
+              request->data, std::chrono::seconds(request->data ? 15 : 3), response->message);
+          if (response->success) {
+            DRIVER_INFO(*this, "set_sampling: %s", response->message.c_str());
+          } else {
+            DRIVER_ERROR(*this, "set_sampling: %s", response->message.c_str());
+          }
+        });
+
+    // The lidar's current mode, for debugging. Its own thread, so it keeps up while set_sampling
+    // holds the executor; latched, so a late `ros2 topic echo` gets it at once.
+    work_mode_pub_ = this->create_publisher<std_msgs::msg::String>(
+        "livox/work_mode", rclcpp::QoS(1).transient_local());
+    work_mode_poll_thread_ = std::make_shared<std::thread>([this, read_lidar]() {
+      do {
+        std_msgs::msg::String msg;
+        msg.data = read_lidar->WorkStateSummary(std::chrono::milliseconds(500));
+        work_mode_pub_->publish(msg);
+      } while (future_.wait_for(std::chrono::seconds(1)) == std::future_status::timeout);
+    });
   } else {
     DRIVER_ERROR(*this, "Invalid data src (%d), please check the launch file", data_src);
   }

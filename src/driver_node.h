@@ -70,6 +70,9 @@ class DriverNode final : public rclcpp::Node {
   std::shared_ptr<std::thread> imudata_poll_thread_;
   std::shared_future<void> future_;
   std::promise<void> exit_signal_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr set_sampling_service_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr work_mode_pub_;
+  std::shared_ptr<std::thread> work_mode_poll_thread_;
 };
 #endif
 

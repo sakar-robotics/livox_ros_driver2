@@ -26,6 +26,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -195,6 +196,170 @@ bool LdsLidar::LivoxLidarStart() {
   return true;
 }
 
+namespace {
+
+// The Mid-360's IDLE: motor and laser off, network up. Livox-SDK2 names 0x02 kLivoxLidarWakeUp
+// after the HAP, whose states differ, so only a Mid-360 is sent it.
+constexpr uint8_t kMid360Idle = 0x02;
+
+const char* WorkStateName(int state) {
+  switch (state) {
+    case 0x01: return "SAMPLING";
+    case 0x02: return "IDLE";
+    case 0x04: return "ERROR";
+    case 0x05: return "SELFCHECK";
+    case 0x06: return "MOTOR_STARTUP";
+    case 0x08: return "UPGRADE";
+    case 0x09: return "READY";
+    default: return state < 0 ? "NOT_ANSWERING" : "UNKNOWN";
+  }
+}
+
+// Shared with the SDK callback, so an answer that comes after the wait gave up is harmless.
+using Answer = std::shared_ptr<std::promise<int>>;
+
+void Deliver(void* client_data, int value) {
+  std::unique_ptr<Answer> answer(static_cast<Answer*>(client_data));
+  (*answer)->set_value(value);
+}
+
+void OnWorkModeSet(livox_status status, uint32_t, LivoxLidarAsyncControlResponse* response,
+                   void* client_data) {
+  int ret = status;
+  if (status == kLivoxLidarStatusSuccess) {
+    ret = response == nullptr ? static_cast<int>(kLivoxLidarStatusFailure) : response->ret_code;
+  }
+  Deliver(client_data, ret);
+}
+
+void OnStateQueried(livox_status status, uint32_t, LivoxLidarDiagInternalInfoResponse* response,
+                    void* client_data) {
+  int state = status != kLivoxLidarStatusSuccess ? status : kLivoxLidarStatusFailure;
+  if (status == kLivoxLidarStatusSuccess && response != nullptr && response->ret_code == 0) {
+    uint16_t off = 0;
+    for (uint16_t i = 0; i < response->param_num; ++i) {
+      auto* kv = reinterpret_cast<LivoxLidarKeyValueParam*>(&response->data[off]);
+      if (kv->key == kKeyCurWorkState) {
+        state = kv->value[0];
+      }
+      off += sizeof(uint16_t) * 2 + kv->length;
+    }
+  }
+  Deliver(client_data, state);
+}
+
+// Sends one request and waits for its callback until `deadline`: the lidar's answer (>= 0) or an
+// SDK status (< 0).
+template <typename Send>
+int Ask(Send send, std::chrono::steady_clock::time_point deadline) {
+  auto answer = std::make_shared<std::promise<int>>();
+  std::future<int> future = answer->get_future();
+  auto* held = new Answer(answer);
+  const livox_status sent = send(held);
+  if (sent != kLivoxLidarStatusSuccess) {
+    delete held;  // the SDK calls back only for a request it sent
+    return sent;
+  }
+  if (future.wait_until(deadline) != std::future_status::ready) {
+    return kLivoxLidarStatusTimeout;
+  }
+  return future.get();
+}
+
+// The lidar's current work state (0x01 SAMPLING, ...), or an SDK status (< 0).
+int QueryWorkState(uint32_t handle, std::chrono::steady_clock::time_point deadline) {
+  return Ask([&](void* held) {
+    return QueryLivoxLidarInternalInfo(handle, OnStateQueried, held);
+  }, deadline);
+}
+
+}  // namespace
+
+std::vector<uint32_t> LdsLidar::Mid360Handles() {
+  std::lock_guard<std::mutex> lock(dev_types_mutex_);
+  std::vector<uint32_t> handles;
+  for (const auto& lidar : dev_types_) {
+    if (lidar.second == kLivoxLidarTypeMid360) {
+      handles.push_back(lidar.first);
+    }
+  }
+  return handles;
+}
+
+std::string LdsLidar::WorkStateSummary(std::chrono::milliseconds timeout) {
+  const auto handles = Mid360Handles();
+  if (handles.empty()) {
+    return "NO_LIDAR";
+  }
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  if (handles.size() == 1) {
+    return WorkStateName(QueryWorkState(handles.front(), deadline));
+  }
+  std::string summary;
+  for (const uint32_t handle : handles) {
+    summary += (summary.empty() ? "" : ", ") + IpNumToString(handle) + ": " +
+               WorkStateName(QueryWorkState(handle, deadline));
+  }
+  return summary;
+}
+
+void LdsLidar::NoteLidarType(uint32_t handle, uint8_t dev_type) {
+  std::lock_guard<std::mutex> lock(dev_types_mutex_);
+  dev_types_[handle] = dev_type;
+}
+
+LivoxLidarWorkMode LdsLidar::TargetWorkMode(uint32_t handle) {
+  std::lock_guard<std::mutex> lock(dev_types_mutex_);
+  const auto it = dev_types_.find(handle);
+  if (!sampling_ && it != dev_types_.end() && it->second == kLivoxLidarTypeMid360) {
+    return static_cast<LivoxLidarWorkMode>(kMid360Idle);
+  }
+  return kLivoxLidarNormal;
+}
+
+bool LdsLidar::SetSampling(bool sampling, std::chrono::milliseconds timeout, std::string& message) {
+  using Clock = std::chrono::steady_clock;
+  sampling_ = sampling;
+  const auto handles = Mid360Handles();
+  if (handles.empty()) {
+    message = "no Mid-360 connected";
+    return false;
+  }
+
+  const uint8_t mode = sampling ? static_cast<uint8_t>(kLivoxLidarNormal) : kMid360Idle;
+  const auto start = Clock::now();
+  const auto deadline = start + timeout;
+  for (const uint32_t handle : handles) {
+    const int ret = Ask([&](void* held) {
+      return SetLivoxLidarWorkMode(handle, static_cast<LivoxLidarWorkMode>(mode), OnWorkModeSet,
+                                   held);
+    }, deadline);
+    if (ret != 0) {
+      message = IpNumToString(handle) + " refused " + WorkStateName(mode) + " (" +
+                std::to_string(ret) + ")";
+      return false;
+    }
+  }
+
+  // From IDLE the motor has to start first: ~6.5 s to SAMPLING.
+  for (const uint32_t handle : handles) {
+    int state = QueryWorkState(handle, deadline);
+    while (state != mode) {
+      if (Clock::now() + std::chrono::milliseconds(200) >= deadline) {
+        message = IpNumToString(handle) + " is " + WorkStateName(state) + ", not " +
+                  WorkStateName(mode) + ", after " + std::to_string(timeout.count()) + " ms";
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      state = QueryWorkState(handle, deadline);
+    }
+  }
+  const auto elapsed =
+      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
+  message = std::string(WorkStateName(mode)) + " after " + std::to_string(elapsed) + " ms";
+  return true;
+}
+
 int LdsLidar::DeInitLdsLidar(void) {
   if (!is_initialized_) {
     printf("LiDAR data source is not exit");
@@ -202,6 +367,12 @@ int LdsLidar::DeInitLdsLidar(void) {
   }
 
   if (lidar_summary_info_.lidar_type & kLivoxLidarType) {
+    if (idle_on_exit_) {
+      std::string message;
+      const bool idle = SetSampling(false, std::chrono::seconds(2), message);
+      std::cout << (idle ? "lidar idle on exit: " : "failed to idle the lidar on exit: ")
+                << message << std::endl;
+    }
     LivoxLidarSdkUninit();
     printf("Livox Lidar SDK Deinit completely!\n");
   }
