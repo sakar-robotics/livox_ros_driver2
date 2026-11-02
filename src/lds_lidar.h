@@ -58,8 +58,8 @@ class LdsLidar final : public Lds {
   int DeInitLdsLidar(void);
 
   /// Switches every connected Mid-360 to SAMPLING (true) or IDLE (false: motor and laser off) and
-  /// waits until each reports that state. A lidar that connects later gets the same. False, with
-  /// why in `message`, on a refusal or when `timeout` runs out.
+  /// waits until each reports that state. Once they have taken it, a lidar that connects later is
+  /// given it too. False, with why in `message`, on a refusal or when `timeout` runs out.
   bool SetSampling(bool sampling, std::chrono::milliseconds timeout, std::string& message);
   /// Each connected Mid-360's current work state (SAMPLING, IDLE, MOTOR_STARTUP, ...): the state
   /// alone for one lidar, `ip: STATE` for each of several, NO_LIDAR before one connects.

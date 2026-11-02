@@ -319,7 +319,6 @@ LivoxLidarWorkMode LdsLidar::TargetWorkMode(uint32_t handle) {
 
 bool LdsLidar::SetSampling(bool sampling, std::chrono::milliseconds timeout, std::string& message) {
   using Clock = std::chrono::steady_clock;
-  sampling_ = sampling;
   const auto handles = Mid360Handles();
   if (handles.empty()) {
     message = "no Mid-360 connected";
@@ -335,19 +334,22 @@ bool LdsLidar::SetSampling(bool sampling, std::chrono::milliseconds timeout, std
                                    held);
     }, deadline);
     if (ret != 0) {
-      message = IpNumToString(handle) + " refused " + WorkStateName(mode) + " (" +
-                std::to_string(ret) + ")";
+      message = IpNumToString(handle) + (ret < 0 ? " did not answer " : " refused ") +
+                WorkStateName(mode) + " (" + std::to_string(ret) + ")";
       return false;
     }
   }
+  // Only now: the lidars have taken the mode, and keep it even across a power cut. A request that
+  // failed before this changes nothing, also for a lidar that reconnects later.
+  sampling_ = sampling;
 
   // From IDLE the motor has to start first: ~6.5 s to SAMPLING.
   for (const uint32_t handle : handles) {
     int state = QueryWorkState(handle, deadline);
     while (state != mode) {
       if (Clock::now() + std::chrono::milliseconds(200) >= deadline) {
-        message = IpNumToString(handle) + " is " + WorkStateName(state) + ", not " +
-                  WorkStateName(mode) + ", after " + std::to_string(timeout.count()) + " ms";
+        message = IpNumToString(handle) + " took " + WorkStateName(mode) + " but is " +
+                  WorkStateName(state) + " after " + std::to_string(timeout.count()) + " ms";
         return false;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(200));

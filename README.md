@@ -216,7 +216,9 @@ powers up in whatever mode it was last left in.
 - **On request**, `livox/set_sampling` (`std_srvs/srv/SetBool`): `true` for SAMPLING, `false` for
   IDLE. It answers once every connected Mid-360 reports that state (`message` says how long it
   took), or fails after 15 s (SAMPLING) / 3 s (IDLE). A Mid-360 that connects later is given the
-  same mode.
+  last mode the lidar took. A request that fails before the lidar takes it (none connected, a
+  refusal, no answer) changes nothing; one that times out after (`took SAMPLING but is
+  MOTOR_STARTUP ...`) stands, as the lidar is on its way there.
 
   ```bash
   ros2 service call /livox/set_sampling std_srvs/srv/SetBool "{data: false}"  # motor off
