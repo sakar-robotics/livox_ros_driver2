@@ -34,6 +34,8 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 #include "livox_ros_driver2/msg/custom_point.hpp"
 #include "livox_ros_driver2/msg/custom_msg.hpp"
 

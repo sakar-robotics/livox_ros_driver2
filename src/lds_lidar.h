@@ -27,8 +27,12 @@
 #ifndef LIVOX_ROS_DRIVER_LDS_LIDAR_H_
 #define LIVOX_ROS_DRIVER_LDS_LIDAR_H_
 
+#include <atomic>
+#include <chrono>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "lds.h"
@@ -52,6 +56,19 @@ class LdsLidar final : public Lds {
   bool Start();
 
   int DeInitLdsLidar(void);
+
+  /// Switches every connected Mid-360 to SAMPLING (true) or IDLE (false: motor and laser off) and
+  /// waits until each reports that state. Once they have taken it, a lidar that connects later is
+  /// given it too. False, with why in `message`, on a refusal or when `timeout` runs out.
+  bool SetSampling(bool sampling, std::chrono::milliseconds timeout, std::string& message);
+  /// Each connected Mid-360's current work state (SAMPLING, IDLE, MOTOR_STARTUP, ...): the state
+  /// alone for one lidar, `ip: STATE` for each of several, NO_LIDAR before one connects.
+  std::string WorkStateSummary(std::chrono::milliseconds timeout);
+  /// The work mode to send `handle` when it connects.
+  LivoxLidarWorkMode TargetWorkMode(uint32_t handle);
+  void NoteLidarType(uint32_t handle, uint8_t dev_type);
+  /// IDLE every Mid-360 before the SDK is closed.
+  void SetIdleOnExit(bool idle_on_exit) { idle_on_exit_ = idle_on_exit; }
  private:
   LdsLidar(double publish_freq);
   LdsLidar(const LdsLidar &) = delete;
@@ -68,6 +85,8 @@ class LdsLidar final : public Lds {
   void ResetLdsLidar(void);
 
   void SetLidarPubHandle();
+
+  std::vector<uint32_t> Mid360Handles();
 
 	// auto connect mode
 	void EnableAutoConnectMode(void) { auto_connect_mode_ = true; }
@@ -87,6 +106,11 @@ class LdsLidar final : public Lds {
   uint32_t whitelist_count_;
   volatile bool is_initialized_;
   char broadcast_code_whitelist_[kMaxLidarCount][kBroadcastCodeSize];
+
+  std::atomic<bool> sampling_{true};
+  std::atomic<bool> idle_on_exit_{false};
+  std::mutex dev_types_mutex_;
+  std::map<uint32_t, uint8_t> dev_types_;  // handle -> LivoxLidarDeviceType, every lidar seen
 };
 
 }  // namespace livox_ros
